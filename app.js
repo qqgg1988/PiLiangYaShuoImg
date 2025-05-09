@@ -147,6 +147,7 @@ function initializeApp() {
     const previewButton = document.getElementById('previewButton');
     const startButton = document.getElementById('startButton');
     const totalInfo = document.getElementById('totalInfo');
+    const returnButton = document.getElementById('returnButton');
 
     // 获取预览相关的DOM元素
     const previewImageSelect = document.getElementById('previewImageSelect');
@@ -308,13 +309,22 @@ function initializeApp() {
             // 存储处理后的图片
             processedImages.push({
                 name: file.name,
-                blob: finalBlob
+                blob: finalBlob,
+                originalSize: file.size,
+                compressedSize: finalBlob.size
             });
             
             // 更新状态
             statusElement.className = 'status success';
             statusElement.textContent = statusText;
             fileItem.classList.remove('processing');
+            
+            // 更新文件项显示压缩后的大小
+            const fileInfo = fileItem.querySelector('.file-info');
+            const sizeSpan = fileInfo.querySelector('.file-size');
+            if (finalBlob !== file) {
+                sizeSpan.textContent = `${formatSize(file.size)} → ${formatSize(finalBlob.size)}`;
+            }
             
         } catch (error) {
             console.error(`Error processing ${file.name}:`, error);
@@ -326,7 +336,9 @@ function initializeApp() {
             // 处理失败时也添加原始文件
             processedImages.push({
                 name: file.name,
-                blob: file
+                blob: file,
+                originalSize: file.size,
+                compressedSize: file.size
             });
         }
     }
@@ -351,59 +363,86 @@ function initializeApp() {
             // 更新总体信息
             let totalOriginalSize = 0;
             let totalCompressedSize = 0;
+            let needCompressionCount = 0;
+            
             processedImages.forEach(img => {
-                totalOriginalSize += imageFiles.find(f => f.name === img.name).size;
-                totalCompressedSize += img.blob.size;
+                totalOriginalSize += img.originalSize || 0;
+                totalCompressedSize += img.compressedSize || 0;
+                if ((img.originalSize || 0) > settings.targetSize) {
+                    needCompressionCount++;
+                }
             });
             
-            const compressionRatio = ((1 - totalCompressedSize / totalOriginalSize) * 100).toFixed(1);
-            const needCompressionCount = imageFiles.filter(file => (file.size / (1024 * 1024)) > settings.targetSize / (1024 * 1024)).length;
+            const compressionRatio = totalOriginalSize > 0 ? ((1 - totalCompressedSize / totalOriginalSize) * 100).toFixed(1) : 0;
             
             totalInfo.innerHTML = `
-                共 <span>${imageFiles.length}</span> 个文件，
+                共 <span>${processedImages.length}</span> 个文件，
                 需压缩 <span>${needCompressionCount}</span> 个，
                 总大小从 <span>${formatSize(totalOriginalSize)}</span> 
                 减少到 <span>${formatSize(totalCompressedSize)}</span>
                 (节省 <span>${compressionRatio}%</span>)
             `;
             
-            // 显示下载按钮
+            // 显示下载按钮和返回按钮
             downloadAllButton.style.display = 'block';
+            returnButton.style.display = 'block';
+            startButton.style.display = 'none';
         } catch (error) {
-            throw error;
+            console.error('压缩过程中出现错误：', error);
+            alert('压缩过程中出现错误，请重试');
+            returnButton.style.display = 'block';
         }
     }
 
     // 下载压缩后的图片
     async function downloadImages() {
-        const zip = new JSZip();
-        const folder = zip.folder("processed_images");
+        if (processedImages.length === 0) {
+            alert('没有可下载的图片！');
+            return;
+        }
 
-        // 添加所有处理后的图片到zip
-        processedImages.forEach(image => {
-            folder.file(image.name, image.blob);
-        });
+        downloadAllButton.disabled = true;
+        downloadAllButton.textContent = '正在打包...';
 
-        // 生成zip文件
-        const content = await zip.generateAsync({
-            type: "blob",
-            compression: "DEFLATE",
-            compressionOptions: {
-                level: 9
-            }
-        });
-        
-        // 创建下载链接
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(content);
-        // 使用文件夹名称和时间戳
-        const timestamp = getTimeString();
-        link.download = `${originalFolderName}_compressed_${timestamp}.zip`;
-        
-        // 触发下载
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        try {
+            const zip = new JSZip();
+            const folder = zip.folder("processed_images");
+
+            // 添加所有处理后的图片到zip
+            processedImages.forEach(image => {
+                folder.file(image.name, image.blob);
+            });
+
+            // 生成zip文件
+            const content = await zip.generateAsync({
+                type: "blob",
+                compression: "DEFLATE",
+                compressionOptions: {
+                    level: 9
+                }
+            });
+            
+            // 创建下载链接
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            // 使用文件夹名称和时间戳
+            const timestamp = getTimeString();
+            link.download = `${originalFolderName}_compressed_${timestamp}.zip`;
+            
+            // 触发下载
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            // 恢复按钮状态
+            downloadAllButton.disabled = false;
+            downloadAllButton.textContent = '打包下载';
+        } catch (error) {
+            console.error('打包下载失败：', error);
+            alert('打包下载失败，请重试！');
+            downloadAllButton.disabled = false;
+            downloadAllButton.textContent = '打包下载';
+        }
     }
 
     // 更新预览
@@ -453,6 +492,7 @@ function initializeApp() {
         // 隐藏所有按钮
         downloadAllButton.style.display = 'none';
         startButton.style.display = 'none';
+        returnButton.style.display = 'none';
         
         // 获取文件夹名称
         if (files.length > 0) {
@@ -469,6 +509,7 @@ function initializeApp() {
 
         if (imageFiles.length === 0) {
             alert('没有找到支持的图片文件！');
+            returnButton.style.display = 'block';
             return;
         }
 
@@ -604,6 +645,35 @@ function initializeApp() {
                 }
                 await previewCompression();
             });
+        });
+
+        // 返回按钮事件
+        returnButton.addEventListener('click', () => {
+            // 重置所有状态
+            imageFiles = [];
+            processedImages = [];
+            progressArea.innerHTML = '';
+            previewImageSelect.innerHTML = '<option value="">选择预览图片...</option>';
+            totalInfo.innerHTML = '';
+            
+            // 清空预览
+            originalPreview.src = '';
+            compressedPreview.src = '';
+            originalSize.textContent = '大小: --';
+            compressedSize.textContent = '大小: --';
+            compressionRatioInfo.textContent = '压缩率: --';
+            
+            // 隐藏所有按钮和设置面板
+            downloadAllButton.style.display = 'none';
+            startButton.style.display = 'none';
+            previewButton.style.display = 'none';
+            settingsPanel.style.display = 'none';
+            
+            // 显示上传区域
+            dropZone.style.display = 'block';
+            
+            // 清空文件输入
+            fileInput.value = '';
         });
     }
 
